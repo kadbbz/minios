@@ -1,0 +1,16 @@
+MiniOS Fast Smoke Test Report
+Started: 2026-05-01T19:44:36.437505
+Ended:   2026-05-01T19:44:36.577411
+Output:  /Users/ningwei/VSCodeProjects/minios/.tmp/test-20260501-194436
+
+Passed: 4
+Failed: 0
+
+[PASS] repository_layout (0 ms)
+  repository baseline directories are present
+[PASS] design_document_exists (0 ms)
+  design doc found with 18269 characters
+[PASS] python_runtime (139 ms)
+  python=3.14.4 platform=macOS-26.4.1-arm64-arm-64bit-Mach-O
+[PASS] output_directory_is_writable (0 ms)
+  wrote write-probe.txt
