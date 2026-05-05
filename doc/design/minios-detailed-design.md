@@ -40,7 +40,10 @@ MiniOS 需要满足以下功能目标：
 
 ### 2.2 约束
 
-1. `threadId` 由业务应用决定，MiniOS 不参与分支创建或管理，只把其作为会话分支键。
+1. `sessionId` 与 `threadId` 均由业务应用决定。
+2. `sessionId` 是 Memory 隔离边界，不同 `sessionId` 的 Memory 不能混用，除非显式执行 `reset session`。
+3. `threadId` 仅用于会话内部追踪、日志关联和工具参数注入，不影响 Memory 隔离。
+4. 对同一用户，调用方应始终提供同一个 `sessionId`，直到明确需要重置该用户会话。
 2. `agentId` 由 MQTT topic 决定，一个 Agent 视为一个租户。
 3. 不采用“一 Agent 一容器”部署模式，Worker 需要承载多个 Agent。
 4. 不要求兼容 OpenClaw 的配置格式，但运行能力需要覆盖其在企业级 AI 工作台场景中的主要执行器职责。
@@ -48,6 +51,7 @@ MiniOS 需要满足以下功能目标：
    - OpenAI 兼容接口：`openai-completions`
    - OpenAI 兼容接口：`openai-responses`
    - Anthropic 兼容接口：`anthropic-messages`
+6. Docker 初始化层只暴露 `llm.json` 与 `env.json` 两个用户配置文件；如第三方容器需要额外启动工件，由初始化过程自动派生到非配置目录。
 
 ### 2.3 非目标
 
@@ -140,7 +144,7 @@ Worker 负责具体执行 Agent 会话与工具调用。
 职责：
 
 1. 管理多个 Agent 的运行时上下文。
-2. 按 `(agentId, sessionId, threadId)` 执行会话。
+2. 按 `(agentId, sessionId, threadId)` 执行会话运行态。
 3. 从 Redis 回放 Session 事件。
 4. 为当前 Agent 绑定独立 workspace、skills、memory 和 policy。
 5. 基于 `pi-mono` SDK 创建和驱动 `AgentSession`。
@@ -380,7 +384,7 @@ Worker 处理入站消息流程：
 
 ### 8.1 Session 语义
 
-MiniOS 中会话主键定义为：
+MiniOS 中会话运行态主键定义为：
 
 - `agentId`
 - `sessionId`
@@ -388,12 +392,29 @@ MiniOS 中会话主键定义为：
 
 语义如下：
 
-- `sessionId` 代表业务层定义的会话树根标识
-- `threadId` 代表业务层定义的某个分支
+- `sessionId` 由调用方提供，是该用户在该 Agent 下的长期会话标识
+- `sessionId` 也是 Memory 隔离边界
+- 不同 `sessionId` 的 Memory 不允许混用，除非显式执行 `reset session`
+- `threadId` 由调用方提供，仅用于当前会话内部追踪
+- `threadId` 不参与 Memory 隔离，也不代表独立长期记忆空间
 - MiniOS 不负责生成或 fork 分支
-- MiniOS 仅对每个 `(sessionId, threadId)` 维护线性执行上下文
+- MiniOS 对每个 `(sessionId, threadId)` 维护独立执行态，但共享同一 `sessionId` 下的 Memory 视图
 
-### 8.2 Session 事件模型
+### 8.2 Session 与 Memory 的关系
+
+MiniOS 需要严格区分“执行态上下文”和“长期记忆边界”：
+
+1. 执行态上下文按 `(agentId, sessionId, threadId)` 区分
+2. 长期 Memory 按 `(agentId, sessionId)` 区分
+3. `threadId` 变化不会创建新的 Memory 空间
+4. 只有显式 `reset session` 才允许清空或重建某个 `sessionId` 对应的 Memory
+
+建议目录视图：
+
+- `agent/{agentId}/memory/session/{sessionId}/...`
+- `agent/{agentId}/runtime/session/{sessionId}/thread/{threadId}/...`
+
+### 8.3 Session 事件模型
 
 Redis 中存储规范化事件，而不是直接依赖 `pi` 默认 JSONL 文件格式。
 
@@ -410,7 +431,7 @@ Redis 中存储规范化事件，而不是直接依赖 `pi` 默认 JSONL 文件�
 - `session_summary`
 - `error`
 
-### 8.3 Redis Key 设计
+### 8.4 Redis Key 设计
 
 建议键设计如下：
 
@@ -435,7 +456,7 @@ Redis 中存储规范化事件，而不是直接依赖 `pi` 默认 JSONL 文件�
 - `createdAt`
 - `updatedAt`
 
-### 8.4 Snapshot 机制
+### 8.5 Snapshot 机制
 
 为避免长对话全量回放，系统需要支持快照。
 
@@ -452,7 +473,7 @@ Redis 中存储规范化事件，而不是直接依赖 `pi` 默认 JSONL 文件�
 - 会话摘要
 - 最近 Memory 命中摘要
 
-### 8.5 幂等与去重
+### 8.6 幂等与去重
 
 MQTT 可能重复投递，入站消息需带 `messageId`。
 
@@ -472,17 +493,38 @@ Redis 去重键示例：
 
 每个 Agent 的 Memory 采用文件层次化设计：
 
+Memory 目录需要按 `sessionId` 隔离，而不是按 `threadId` 隔离。
+
+推荐结构：
+
+```text
+workspace/
+  MEMORY.md
+  sessions/
+    <sessionId>/
+      memory/
+      transcript/
+```
+
+其中：
+
 1. `MEMORY.md`
    - 长期稳定事实
    - 偏好
    - 系统约束
    - 持久规则
-2. `memory/*.md`
+2. `sessions/<sessionId>/memory/*.md`
    - 日常记忆
    - 操作观察
    - 临时归纳
-3. `sessions/*.md`
-   - 导出的历史会话摘要或清洗记录
+3. `sessions/<sessionId>/transcript/*.md`
+   - 该 `sessionId` 下导出的历史会话摘要或清洗记录
+
+注意：
+
+1. 同一 `sessionId` 下的不同 `threadId` 共享同一个 Memory 空间
+2. 不同 `sessionId` 之间的 Memory 必须硬隔离
+3. `reset session` 只作用于目标 `sessionId`
 
 ### 9.2 QMD 目录
 

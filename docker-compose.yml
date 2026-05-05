@@ -1,0 +1,104 @@
+services:
+  config-bootstrap:
+    image: node:24-bookworm
+    container_name: minios-config-bootstrap
+    restart: "no"
+    working_dir: /workspace
+    command: ["node", "scripts/render-runtime-env.mjs", "/data"]
+    volumes:
+      - .:/workspace:ro
+      - ${MINIOS_DATA_DIR:-./data}:/data
+
+  gateway:
+    image: ${MINIOS_GATEWAY_IMAGE:-minios-gateway:latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: minios-gateway
+    restart: unless-stopped
+    depends_on:
+      config-bootstrap:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      emqx:
+        condition: service_started
+      minio:
+        condition: service_started
+    environment:
+      MINIOS_DATA_DIR: /data/minios
+      MINIOS_ROOT_DIR: /data/minios/root
+      MINIOS_LLM_CONFIG_PATH: /data/minios/config/llm.json
+      MINIOS_ENV_PATH: /data/minios/config/env.json
+      MINIOS_VENDOR_DIR: /opt/minios/vendor
+    ports:
+      - "8080:8080"
+    volumes:
+      - ${MINIOS_DATA_DIR:-./data}/gateway:/data/minios
+      - ${MINIOS_DATA_DIR:-./data}/config:/data/minios/config:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r => { if (!r.ok) process.exit(1); }).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    container_name: minios-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - ${MINIOS_DATA_DIR:-./data}/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  emqx:
+    image: emqx/emqx:5.8.6
+    container_name: minios-emqx
+    restart: unless-stopped
+    depends_on:
+      config-bootstrap:
+        condition: service_completed_successfully
+    entrypoint: ["/bin/sh", "-lc"]
+    command:
+      - |
+        set -eu
+        . /bootstrap/emqx.env
+        exec /usr/bin/docker-entrypoint.sh /opt/emqx/bin/emqx foreground
+    ports:
+      - "1883:1883"
+      - "8083:8083"
+      - "8084:8084"
+      - "8883:8883"
+      - "18083:18083"
+    volumes:
+      - ${MINIOS_DATA_DIR:-./data}/emqx/data:/opt/emqx/data
+      - ${MINIOS_DATA_DIR:-./data}/emqx/log:/opt/emqx/log
+      - ${MINIOS_DATA_DIR:-./data}/runtime-env:/bootstrap:ro
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
+    container_name: minios-minio
+    restart: unless-stopped
+    depends_on:
+      config-bootstrap:
+        condition: service_completed_successfully
+    entrypoint: ["/bin/sh", "-lc"]
+    command:
+      - |
+        set -eu
+        . /bootstrap/minio.env
+        exec /usr/bin/docker-entrypoint.sh minio server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - ${MINIOS_DATA_DIR:-./data}/minio/data:/data
+      - ${MINIOS_DATA_DIR:-./data}/minio/config:/root/.minio
+      - ${MINIOS_DATA_DIR:-./data}/runtime-env:/bootstrap:ro

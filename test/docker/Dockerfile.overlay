@@ -1,0 +1,8 @@
+FROM minios-gateway:latest
+
+WORKDIR /app
+
+RUN command -v mqtt-bash-exec-channel >/dev/null 2>&1 || npm install -g mqtt-bash-exec-channel@0.2.0
+
+COPY dist ./dist
+COPY package.json package-lock.json ./
