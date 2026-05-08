@@ -14,11 +14,7 @@
       "corp-openai": {
         "api": "openai-completions",
         "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "apiKey": {
-          "source": "env",
-          "provider": "default",
-          "id": "OC_OPENAI_API_KEY"
-        },
+        "apiKeyEnv": "OC_OPENAI_API_KEY",
         "models": [
           {
             "id": "qwen3.5-plus",

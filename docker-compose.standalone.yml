@@ -7,7 +7,7 @@ services:
     command: ["node", "scripts/render-runtime-env.mjs", "/data"]
     volumes:
       - .:/workspace:ro
-      - ${MINIOS_DATA_DIR:-./data}:/data
+      - ${MINIOS_DATA_DIR:-./data/standalone}:/data
 
   gateway:
     image: ${MINIOS_GATEWAY_IMAGE:-minios-gateway:latest}
@@ -34,8 +34,8 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - ${MINIOS_DATA_DIR:-./data}/gateway:/data/minios
-      - ${MINIOS_DATA_DIR:-./data}/config:/data/minios/config:ro
+      - ${MINIOS_DATA_DIR:-./data/standalone}/gateway:/data/minios
+      - ${MINIOS_DATA_DIR:-./data/standalone}/config:/data/minios/config:ro
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r => { if (!r.ok) process.exit(1); }).catch(() => process.exit(1))"]
       interval: 10s
@@ -51,7 +51,7 @@ services:
     ports:
       - "6379:6379"
     volumes:
-      - ${MINIOS_DATA_DIR:-./data}/redis:/data
+      - ${MINIOS_DATA_DIR:-./data/standalone}/../redis:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -78,9 +78,9 @@ services:
       - "8883:8883"
       - "18083:18083"
     volumes:
-      - ${MINIOS_DATA_DIR:-./data}/emqx/data:/opt/emqx/data
-      - ${MINIOS_DATA_DIR:-./data}/emqx/log:/opt/emqx/log
-      - ${MINIOS_DATA_DIR:-./data}/runtime-env:/bootstrap:ro
+      - ${MINIOS_DATA_DIR:-./data/standalone}/../emqx/data:/opt/emqx/data
+      - ${MINIOS_DATA_DIR:-./data/standalone}/../emqx/log:/opt/emqx/log
+      - ${MINIOS_DATA_DIR:-./data/standalone}/runtime-env:/bootstrap:ro
 
   minio:
     image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
@@ -99,6 +99,6 @@ services:
       - "9000:9000"
       - "9001:9001"
     volumes:
-      - ${MINIOS_DATA_DIR:-./data}/minio/data:/data
-      - ${MINIOS_DATA_DIR:-./data}/minio/config:/root/.minio
-      - ${MINIOS_DATA_DIR:-./data}/runtime-env:/bootstrap:ro
+      - ${MINIOS_DATA_DIR:-./data/standalone}/../minio/data:/data
+      - ${MINIOS_DATA_DIR:-./data/standalone}/../minio/config:/root/.minio
+      - ${MINIOS_DATA_DIR:-./data/standalone}/runtime-env:/bootstrap:ro

@@ -1,403 +1,279 @@
 # MiniOS Development Guide
 
-## 项目简介
-
-MiniOS 是一个基于 `pi-mono` 设计的企业级 AI Agent 平台，目标是提供：
-
-- 多 Agent 执行能力
-- MQTT 消息交互通道
-- Redis Session 存储
-- 文件型 Memory 与 QMD 检索
-- S3 兼容对象存储附件传输
-- 可控工具调用链路
-- 集群化 Gateway / Worker 部署模型
-
-当前仓库处于早期开发阶段，已经具备最小核心骨架：
-
-- TypeScript 工程结构
-- Agent / Template 管理
-- Skill 管理
-- MQTT topic 路由解析
-- Session Redis key 生成
-- Tool policy 白名单与参数注入
-- 本地文件型 Session Store
-- 本地 Worker / Gateway runtime
-- `platform doctor`
-- `restart` / `doctor` / `logs` CLI
-- Python fast smoke test
+这个文档面向开发者，补充 README 中不需要让普通使用者优先关心的内容：目录结构、运行时布局、测试方式、以及三种启动模式在仓库内部的实现关系。
 
 ## 当前范围
 
-当前代码实现的范围主要是平台核心基础层，不包含完整运行时接入：
+当前仓库已经具备：
 
-已实现：
-
-- TypeScript 构建与模块导出
-- CLI 基础入口
-- Agent 管理器
-- Skill 管理器
-- Topic 路由器
-- Session key 生成器
-- Tool policy 引擎
-- 本地文件型 Session Store
-- 本地 Worker / Gateway runtime
+- TypeScript 工程与 CLI
+- Agent / Template / Skill 管理
+- 本地 gateway / worker 最小闭环
 - `platform doctor`
-- `restart` / `doctor` / `logs` CLI
-- Fast 冒烟测试
+- Docker 化 gateway
+- fast smoke test
+- docker image test
 
-尚未实现：
+当前仍在持续完善：
 
-- MQTT 实际连接
-- Redis Session Store
-- QMD 实际检索集成
-- 对象存储上传下载
-- 基于 `pi-mono` 的真实 `AgentSession` 驱动
+- 完整的 MQTT 接入
+- Redis 作为正式 Session Store
+- 对象存储上传下载全链路
+- 多 worker / 集群执行模型
 
-因此，当前仓库已经具备“本地最小闭环 + 平台约束模型 + 开发起点”，但还不是最终的外部依赖集成版本。
+因此，这个仓库更适合开发、联调、回归验证，而不是直接当作最终生产方案说明书。
 
-## 项目结构
+## 三种运行模式在仓库里的对应关系
 
-当前目录结构如下：
+### 1. Standalone Compose
 
-```text
-.
-├── dev_guide.md
-├── doc/
-│   └── design/
-│       └── minios-detailed-design.md
-├── src/
-│   ├── cli.ts
-│   ├── index.ts
-│   └── core/
-│       ├── agent-manager.ts
-│       ├── fs-utils.ts
-│       ├── session-keys.ts
-│       ├── skill-manager.ts
-│       ├── tool-policy.ts
-│       └── topic-router.ts
-├── test/
-│   └── fast/
-│       ├── README.md
-│       └── run_smoke.py
-├── package.json
-├── tsconfig.json
-└── .gitignore
+对应文件：
+
+- `docker-compose.standalone.yml`
+- `Dockerfile`
+- `scripts/compose-up.mjs`
+
+特点：
+
+- 拉起 `gateway + redis + emqx + minio`
+- 适合本地完整联调
+- Docker 测试默认复用这一套依赖定义
+
+### 2. Gateway Compose
+
+对应文件：
+
+- `docker-compose.gateway.yml`
+- `Dockerfile`
+- `scripts/compose-up.mjs`
+
+特点：
+
+- 只拉起 `gateway`
+- 依赖外部 `redis / mqtt / s3`
+- 适合把 MiniOS 接到已有基础设施
+
+### 3. Node Gateway
+
+对应文件：
+
+- `scripts/start-node-gateway.mjs`
+- `src/gateway/server.ts`
+
+特点：
+
+- 直接在宿主机 Node 上跑 gateway
+- 更适合调试和开发
+- 依赖外部 `redis / mqtt / s3`
+
+## 运行时数据布局
+
+三种模式默认都复用 `./data/`。初始化入口是：
+
+```bash
+npm run compose:init:standalone
+npm run compose:init:gateway
+npm run compose:init:node
 ```
 
-### `doc/design/`
+主要目录：
 
-设计文档目录。
+```text
+data/
+  standalone/
+    config/
+      llm.json
+      env.json
+    gateway/
+      root/
+        data/
+          agents/
+          platform/
+            templates/
+            skills/
+      logs/
+      test-runs/
+    runtime-env/
+  gateway/
+    config/
+      llm.json
+      env.json
+    gateway/
+      root/
+      logs/
+      test-runs/
+    runtime-env/
+  node/
+    config/
+      llm.json
+      env.json
+    gateway/
+      root/
+      logs/
+      test-runs/
+    runtime-env/
+  redis/
+  emqx/
+    data/
+    log/
+  minio/
+    data/
+    config/
+```
 
-- `minios-detailed-design.md`
-  MiniOS 当前的详细设计说明，覆盖架构、协议、隔离、存储、策略、运维等内容。
+说明：
 
-### `src/`
+- `data/<mode>/config/` 是各模式独立维护的配置
+- `data/<mode>/runtime-env/` 是从该模式 `env.json` 自动渲染出来的容器启动工件
+- `data/<mode>/gateway/root/` 是该模式的 gateway 运行时根目录
+- `data/redis/`、`data/emqx/`、`data/minio/` 是 standalone 共享的第三方依赖持久化目录
 
-TypeScript 源码目录。
+## 配置加载关系
 
-### `src/cli.ts`
+### `<mode>/config/env.json`
 
-CLI 入口，当前支持：
+`src/runtime/env-config.ts` 会按以下顺序加载环境配置：
 
-- `agents list`
-- `agents add`
-- `agents delete`
-- `agents info`
-- `agents restore`
-- `agents restart`
-- `agents doctor`
-- `agents logs`
-- `platform doctor`
-- `skills list`
-- `skills install`
-- `skills uninstall`
-- `runtime publish`
-- `runtime control`
-- `policy check`
+1. `MINIOS_ENV_PATH`
+2. `MINIOS_DATA_DIR/config/env.json`
+3. 当前工作目录下的 `config/<mode>/env.json` 仅作为模板源，不应作为运行时主入口
 
-### `src/core/agent-manager.ts`
+`gateway`、`node`、`minio`、`emqx` 四个 block 会被展开成环境变量。
 
-负责：
+### `scripts/render-runtime-env.mjs`
 
-- 管理 Agent 目录
-- 从模板创建 Agent
-- 读取 Agent manifest
-- 恢复模板文件
-- 删除 Agent
+这个脚本会把 `env.json` 中的：
 
-### `src/core/skill-manager.ts`
+- `minio`
+- `emqx`
 
-负责：
+渲染为：
 
-- 全局 Skill 安装、卸载、列举
-- Agent 级 Skill 安装、卸载、列举
+- `data/<mode>/runtime-env/minio.env`
+- `data/<mode>/runtime-env/emqx.env`
 
-### `src/core/topic-router.ts`
+standalone compose 里的第三方容器就是靠这两个文件启动。
 
-负责：
+## Session 约束
 
-- 解析 MQTT topic
-- 识别 `agentId`
-- 区分业务消息与控制消息
-- 区分 `in/out`
+当前会话模型有几个固定约束：
 
-### `src/core/session-keys.ts`
+- `sessionId` 和 `threadId` 都由调用方提供
+- `sessionId` 是长期会话标识，也是 Memory 隔离边界
+- `threadId` 只负责链路追踪
+- 只有显式 reset 才应该清理某个 `sessionId` 的状态
 
-负责：
+可以简单理解为：
 
-- 统一生成 Redis Session 相关 key
-- 避免上层各处散落字符串拼接逻辑
+- `sessionId` 决定“记住谁”
+- `threadId` 决定“这次调用怎么追踪”
 
-### `src/runtime/`
+## 开发时常用命令
 
-负责当前阶段的本地最小运行时：
-
-- `protocol.ts`
-  业务消息、控制消息和事件模型
-- `file-session-store.ts`
-  文件型 Session 元数据、事件、去重与 transcript 持久化
-- `local-worker.ts`
-  本地 Worker 执行闭环与控制命令
-- `local-gateway.ts`
-  基于 topic 的进程内调度封装
-- `platform-doctor.ts`
-  平台级依赖检查，包括 Redis / MQTT / S3 / CLI 可用性
-
-### `src/core/tool-policy.ts`
-
-负责：
-
-- 命令白名单匹配
-- 参数注入
-- 路径访问校验
-- 网络访问校验
-
-这是后续受控 `bash` 工具链的核心雏形。
-
-### `src/core/fs-utils.ts`
-
-负责：
-
-- 文件系统辅助函数
-- JSON 文件读写
-- 目录创建、删除、列举
-- 资源 ID 校验
-
-### `test/fast/`
-
-快速冒烟测试目录。
-
-- `run_smoke.py`
-  运行一组零依赖、快速完成的基础测试
-- `README.md`
-  简要使用说明
-
-### `test/docker/`
-
-基于已构建 image 的 Docker 测试目录。
-
-- `compose_image_fast_test.py`
-  复用仓库 `docker-compose.yml` 中的 `redis`、`emqx`、`minio`，再对 built image 做回归
-- `Dockerfile.overlay`
-  在本地已有 `minios-gateway:latest` 基础上覆盖最新 `dist/` 的测试镜像定义
-- `README.md`
-  使用说明
-
-### `.tmp/`
-
-测试输出目录，不提交到版本库。
-
-fast 测试每次运行都会生成：
-
-- `.tmp/test-{timestamp}/summary.json`
-- `.tmp/test-{timestamp}/report.txt`
-
-## 运行环境
-
-推荐环境：
-
-- Node.js 24+
-- npm 11+
-- Python 3.10+
-
-当前验证过的环境：
-
-- Node.js `v24.14.0`
-- npm `11.12.1`
-- Python `3.14.4`
-
-## 安装依赖
-
-在仓库根目录执行：
+安装依赖：
 
 ```bash
 npm install
 ```
 
-这会安装 TypeScript 编译所需的最小依赖。
-
-## 编译方法
-
-### 构建
-
-执行：
+构建：
 
 ```bash
 npm run build
 ```
 
-输出目录：
-
-```text
-dist/
-```
-
-其中会包含：
-
-- `dist/cli.js`
-- `dist/index.js`
-- `dist/core/*.js`
-
-### 仅做类型检查
-
-执行：
+类型检查：
 
 ```bash
 npm run check
 ```
 
-### 清理构建产物
-
-执行：
+本地 Node 模式启动 gateway：
 
 ```bash
-npm run clean
+npm run start:gateway:node
 ```
 
-## 测试方法
+Standalone Compose 启动：
 
-### Fast 冒烟测试
+```bash
+npm run compose:standalone:up
+```
 
-执行：
+Gateway Compose 启动：
+
+```bash
+npm run compose:gateway:up
+```
+
+## 测试
+
+### Fast smoke test
 
 ```bash
 python3 test/fast/run_smoke.py
 ```
 
-该脚本会：
+这个测试覆盖：
 
-1. 创建 `.tmp/test-{ts}` 输出目录
-2. 检查仓库基础结构
-3. 检查设计文档存在性
-4. 检查 Python 运行时
-5. 检查输出目录可写
-6. 执行 `npm run build`
-7. 验证 agent CLI 流程
-8. 验证 skill CLI 流程
-9. 验证 topic router、session key、tool policy 行为
+- 仓库基础结构
+- `npm run build`
+- Agent CLI 流程
+- Skill CLI 流程
+- topic router / session key / tool policy 的基础行为
 
-输出文件包括：
+输出目录：
 
-- `summary.json`
-- `report.txt`
+- `.tmp/test-{timestamp}/report.txt`
+- `.tmp/test-{timestamp}/summary.json`
 
-### 查看最近一次测试结果
-
-可以执行：
+### Docker image tests
 
 ```bash
-latest=$(ls -1 .tmp | sort | tail -n 1)
-cat .tmp/$latest/report.txt
+python3 test/docker/compose_image_fast_test.py --image minios-gateway:latest
+python3 test/docker/compose_image_full_test.py --image minios-gateway:latest
 ```
 
-## CLI 使用示例
+这些测试会：
 
-### 创建 Agent
+- 初始化独立的 compose 数据目录
+- 复用 `docker-compose.standalone.yml` 提供的 `redis / emqx / minio`
+- 用目标镜像启动 `gateway`
+- 验证 healthz、publish、附件、模板填充等链路
 
-```bash
-node dist/cli.js agents add --root /path/to/runtime --id agent-alpha --template basic
+运行前需要：
+
+- 本机已有相关 Docker image
+- 设置 `OC_OPENAI_API_KEY`
+
+## 目录结构
+
+```text
+.
+├── README.md
+├── dev_guide.md
+├── docker-compose.gateway.yml
+├── docker-compose.standalone.yml
+├── Dockerfile
+├── scripts/
+├── src/
+├── config/
+├── test/
+└── doc/
 ```
 
-### 查看 Agent
+重点目录：
 
-```bash
-node dist/cli.js agents info --root /path/to/runtime --id agent-alpha
-```
-
-### 恢复模板文件
-
-```bash
-node dist/cli.js agents restore --root /path/to/runtime --id agent-alpha
-```
-
-### 安装全局 Skill
-
-```bash
-node dist/cli.js skills install --root /path/to/runtime -g /path/to/sample-skill
-```
-
-### 安装 Agent Skill
-
-```bash
-node dist/cli.js skills install --root /path/to/runtime -a agent-alpha /path/to/sample-skill
-```
-
-## 开发建议
-
-### 代码组织建议
-
-后续新增模块建议继续按职责拆分在 `src/core/` 或更细的子目录中，例如：
-
-- `src/gateway/`
-- `src/worker/`
-- `src/session/`
-- `src/memory/`
-- `src/storage/`
-- `src/monitoring/`
-
-### 增量开发顺序建议
-
-建议按以下顺序推进：
-
-1. Redis Session Store
-2. Gateway / Worker 基础运行模型
-3. MQTT 接入层
-4. 对象存储适配层
-5. `pi-mono` AgentSession 集成
-6. QMD Memory 检索
-7. 运维控制命令
-8. 监控与审计
-
-### 测试扩展建议
-
-当前 `fast` 测试只覆盖基础骨架。后续建议补充：
-
-- Redis 集成测试
-- MQTT 协议测试
-- 对象存储测试
-- Tool policy 边界测试
-- AgentSession 运行流测试
-- Gateway / Worker 路由测试
+- `src/cli.ts`: CLI 入口
+- `src/gateway/server.ts`: gateway 进程入口
+- `src/runtime/`: 本地运行时与配置装配
+- `src/core/`: Agent、Skill、Policy、Topic 等核心模块
+- `scripts/init-compose-data.mjs`: 统一初始化 `./data/`
+- `config/standalone/`, `config/gateway/`, `config/node/`: 三套配置模板
+- `scripts/compose-up.mjs`: 通用 compose 启动器
+- `scripts/start-node-gateway.mjs`: 本地 Node 模式启动器
 
 ## 参考文档
 
-- 详细设计文档：[minios-detailed-design.md](/Users/ningwei/VSCodeProjects/minios/doc/design/minios-detailed-design.md)
-
-## 总结
-
-当前仓库已经具备 MiniOS 的第一层核心框架与测试基础，可以在此之上继续实现：
-
-- 集群执行能力
-- 会话持久化
-- Memory 与检索
-- 受控工具链路
-- 企业级运维与审计
-
-日常开发建议先执行：
-
-```bash
-npm run build
-python3 test/fast/run_smoke.py
-```
-
-确保构建和冒烟测试都通过后，再继续提交后续变更。
+- 详细设计：[doc/design/minios-detailed-design.md](./doc/design/minios-detailed-design.md)
+- Docker 测试说明：[test/docker/README.md](./test/docker/README.md)

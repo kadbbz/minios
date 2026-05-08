@@ -1,0 +1,28 @@
+{
+  "agents": {
+    "defaults": {
+      "workspace": "/data/platform/workspaces/default",
+      "model": {
+        "primary": "corp-openai/qwen3.5-plus",
+        "backups": []
+      }
+    }
+  },
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "corp-openai": {
+        "api": "openai-completions",
+        "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "apiKeyEnv": "OC_OPENAI_API_KEY",
+        "models": [
+          {
+            "id": "qwen3.5-plus",
+            "name": "Qwen 3.5 Plus",
+            "contextTokens": 1000000
+          }
+        ]
+      }
+    }
+  }
+}

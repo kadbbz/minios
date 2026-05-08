@@ -2,9 +2,10 @@
 
 import path from "node:path";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 
-async function main(argv) {
-  const rootDir = path.resolve(argv[0] ?? process.cwd());
+export async function renderRuntimeEnv(rootArg = process.cwd()) {
+  const rootDir = path.resolve(rootArg);
   const configDir = path.join(rootDir, "config");
   const runtimeEnvDir = path.join(rootDir, "runtime-env");
   const envPath = path.join(configDir, "env.json");
@@ -19,14 +20,14 @@ async function main(argv) {
     writeFile(path.join(runtimeEnvDir, "emqx.env"), emqx, "utf8"),
   ]);
 
-  process.stdout.write(`${JSON.stringify({
+  return {
     ok: true,
     rootDir,
     outputs: [
       path.join(runtimeEnvDir, "minio.env"),
       path.join(runtimeEnvDir, "emqx.env"),
     ],
-  }, null, 2)}\n`);
+  };
 }
 
 function serializeEnvBlock(value, label) {
@@ -50,8 +51,17 @@ function serializeEnvBlock(value, label) {
   return `${lines.join("\n")}\n`;
 }
 
-main(process.argv.slice(2)).catch((error) => {
-  const message = error instanceof Error ? error.message : String(error);
-  process.stderr.write(`${message}\n`);
-  process.exitCode = 1;
-});
+async function main(argv) {
+  const result = await renderRuntimeEnv(argv[0] ?? process.cwd());
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+}
+
+const isDirectExecution = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isDirectExecution) {
+  main(process.argv.slice(2)).catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`${message}\n`);
+    process.exitCode = 1;
+  });
+}

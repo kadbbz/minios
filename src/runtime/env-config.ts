@@ -41,7 +41,7 @@ export function resolveEnvConfigPath(): string {
     return path.resolve(dataDir, "config", "env.json");
   }
 
-  return path.resolve(process.cwd(), "config", "env.json");
+  return path.resolve(process.cwd(), "config", "node", "env.json");
 }
 
 function applyEnvBlock(block: Record<string, string | number | boolean | null> | undefined): void {

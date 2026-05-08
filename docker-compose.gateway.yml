@@ -1,0 +1,25 @@
+services:
+  gateway:
+    image: ${MINIOS_GATEWAY_IMAGE:-minios-gateway:latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: minios-gateway
+    restart: unless-stopped
+    environment:
+      MINIOS_DATA_DIR: /data/minios
+      MINIOS_ROOT_DIR: /data/minios/root
+      MINIOS_LLM_CONFIG_PATH: /data/minios/config/llm.json
+      MINIOS_ENV_PATH: /data/minios/config/env.json
+      MINIOS_VENDOR_DIR: /opt/minios/vendor
+    ports:
+      - "8080:8080"
+    volumes:
+      - ${MINIOS_DATA_DIR:-./data/gateway}/gateway:/data/minios
+      - ${MINIOS_DATA_DIR:-./data/gateway}/config:/data/minios/config:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r => { if (!r.ok) process.exit(1); }).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s

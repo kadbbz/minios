@@ -105,14 +105,14 @@ def run_step(name: str, func: Callable[[Path, Path], str], root: Path, out_dir: 
 
 def compose_args(root: Path, out_dir: Path, *extra: str) -> list[str]:
     state = read_state(out_dir)
-    return ["docker", "compose", "--env-file", str(state["envFile"]), *extra]
+    return ["docker", "compose", "-f", str(root / "docker-compose.standalone.yml"), "--env-file", str(state["envFile"]), *extra]
 
 
 def init_compose_data(root: Path, data_dir: Path, openai_api_key: str) -> None:
-    result = run_command(["bash", "scripts/init-compose-data.sh", str(data_dir)], root, timeout=60)
+    result = run_command(["node", "scripts/init-compose-data.mjs", str(data_dir), "standalone"], root, timeout=60)
     require(result.returncode == 0, f"compose data init failed\nstdout={result.stdout}\nstderr={result.stderr}")
-    rewrite_env_json_value(data_dir / "config" / "env.json", "gateway", "OC_OPENAI_API_KEY", openai_api_key)
-    rerender_result = run_command(["node", "scripts/render-runtime-env.mjs", str(data_dir)], root, timeout=60)
+    rewrite_env_json_value(data_dir / "standalone" / "config" / "env.json", "gateway", "OC_OPENAI_API_KEY", openai_api_key)
+    rerender_result = run_command(["node", "scripts/render-runtime-env.mjs", str(data_dir / "standalone")], root, timeout=60)
     require(rerender_result.returncode == 0, f"runtime env render failed\nstdout={rerender_result.stdout}\nstderr={rerender_result.stderr}")
 
 
@@ -133,7 +133,7 @@ def prepare_fixture(root: Path, out_dir: Path) -> str:
     init_compose_data(root, compose_data_dir, key)
 
     run_name = "fast-run"
-    run_root_host = compose_data_dir / "gateway" / "test-runs" / run_name
+    run_root_host = compose_data_dir / "standalone" / "gateway" / "test-runs" / run_name
     fixture_root = run_root_host / "fixture"
     runtime_root = run_root_host / "root"
     results_dir = run_root_host / "results"
@@ -197,7 +197,7 @@ def prepare_fixture(root: Path, out_dir: Path) -> str:
         "\n".join(
             [
                 f"MINIOS_GATEWAY_IMAGE={TEST_IMAGE}",
-                f"MINIOS_DATA_DIR={compose_data_dir}",
+                f"MINIOS_DATA_DIR={compose_data_dir / 'standalone'}",
             ]
         )
         + "\n",
@@ -452,8 +452,8 @@ def restart_persistence(root: Path, out_dir: Path) -> str:
     require(host_inbox.is_file(), f"inbox file lost after restart: {host_inbox}")
     require(host_outbox.is_file(), f"outbox file lost after restart: {host_outbox}")
     require((runtime_root_host / "data" / "platform" / "templates" / "basic" / "manifest.json").is_file(), "template manifest missing after restart")
-    require((compose_data_dir / "config" / "llm.json").is_file(), "persisted llm config missing after restart")
-    require((compose_data_dir / "config" / "env.json").is_file(), "persisted env config missing after restart")
+    require((compose_data_dir / "standalone" / "config" / "llm.json").is_file(), "persisted llm config missing after restart")
+    require((compose_data_dir / "standalone" / "config" / "env.json").is_file(), "persisted env config missing after restart")
     return f"{wait_message}; persisted config, templates and workspace files survived docker restart"
 
 
